@@ -27,40 +27,38 @@ source .venv/bin/activate
 
 pip install -r requirements.txt
 
-### 3. Configure environment variables and google cloud
+## Configure environment variables and google cloud
 
-# Install gcloud
+### 1. Install gcloud
 brew install google-cloud-sdk
 
-# Login with the email added to google cloud
+### 2. Login with the email added to google cloud
 gcloud auth application-default login 
 
-# Set quota project
+### 3. Set quota project
 gcloud auth application-default set-quota-project portfolio-builder-494211
 
-# configure env 
+### 4. configure env 
 cp .env.example .env
 
 
 
 
 
-### 4. Set up Google Drive MCP
+## Set up Google Drive MCP
 
+### 1. Setup Oauth
 Get the `gcp-oauth.keys.json` file from Ajith and place it at:
 
 ~/.config/google-drive-mcp/gcp-oauth.keys.json
 
-Then authenticate:
+### 2. Authenticate (use the same google account)
 
 npx @piotr-agier/google-drive-mcp auth
 
 This opens your browser — sign in with your Google account.
 
-### 5. Run the agent
-
-
-In Terminal 1— start the ADK web interface:
+### 3. Run the agent
 
 adk web
 
@@ -68,13 +66,17 @@ Then open your browser at http://localhost:8000
 
 ## Project Structure
 
-Automated-Portfolio/
-├── agent.py          # Agent definitions
-├── tools.py          # Custom tools (exit_loop, firebase deploy)
-├── .env              # Environment variables (not committed)
-├── .env.example      # Environment variable template
-├── requirements.txt  # Python dependencies
+```
+AUTOMATED-PORTFOLIO/
+├── automated_portfolio_builder/
+│   ├── __init__.py
+│   └── agent.py
+├── .env
+├── .env.example
+├── .gitignore
+├── requirements.txt
 └── README.md
+```
 
 ## CV Template
 
@@ -94,4 +96,4 @@ GitHub:
 
 ## Team
 
-Built by GDGC Auckland for the Tap to Deploy workshop.
+Built by GDGC Auckland for the NFC workshop
