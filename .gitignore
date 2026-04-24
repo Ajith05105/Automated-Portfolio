@@ -28,3 +28,7 @@ env/
 
 # Logs
 *.log
+
+#ADK
+.adk/
+
