@@ -94,6 +94,16 @@ Contact Email:
 LinkedIn:
 GitHub:
 
+Style: [minimal / bold / creative / corporate / playful]
+Theme: [dark / light / auto]
+Primary Color: [e.g. teal, purple, orange, or hex code]
+Font Preference: [modern / classic / technical / none]
+Layout: [single-page / multi-page]
+Section Order: [e.g. Hero, About, Experience, Skills, Projects, Contact]
+Tone: [professional / casual / creative]
+Inspiration: [optional — e.g. "like stripe.com" or "clean and typographic"]
+Extra Notes: [anything else — e.g. "no animations", "lots of whitespace", "bold headings"]
+
 ## Team
 
 Built by GDGC Auckland for the NFC workshop
