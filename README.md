@@ -6,8 +6,8 @@ deployed portfolio website using Google ADK, Gemini, and Firebase.
 ## How It Works
 
 1. Agent 1 fetches CV content from a Google Doc via Google Drive MCP
-2. Agent 2 generates a styled HTML portfolio using Gemini
-3. Agent 3 deploys the site to Firebase Hosting and returns a live URL
+2. Agent 2 generates a styled HTML portfolio using Google Stitch
+3. Agent 3 deploys the site to Netlify and returns a live URL
 
 ## Prerequisites
 
@@ -44,6 +44,31 @@ cp .env.example .env
 
 
 
+
+## Set up Google Stitch MCP
+
+### 1. Get a Stitch API key
+Go to [stitch.withgoogle.com/settings](https://stitch.withgoogle.com/settings) → create an API key.
+
+### 2. Add it to your .env
+```
+STITCH_API_KEY=your_api_key_here
+```
+
+No CLI login needed — the key is passed directly in the MCP request headers.
+
+---
+
+## Set up Netlify MCP
+
+### 1. Authenticate
+Run this in your terminal:
+```
+npx netlify-cli login
+```
+This opens your browser — sign in with your Netlify account. The token is stored locally at `~/.netlify/config.json` and is used automatically by the MCP on every run.
+
+---
 
 ## Set up Google Drive MCP
 
