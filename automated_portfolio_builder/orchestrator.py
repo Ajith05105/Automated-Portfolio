@@ -25,14 +25,14 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from .agent import root_agent
+from .agent import build_root_agent
 from .scan_drive import scan_folder
 from .sheets import append_results
 
 load_dotenv()
 
 APP_NAME = 'portfolio-builder'
-BATCH_SIZE = 5
+BATCH_SIZE = 2
 
 
 def slugify(value: str) -> str:
@@ -54,11 +54,14 @@ def load_attendees(path: str) -> list[dict]:
 
 
 async def run_pipeline_for_attendee(
-    runner: Runner,
     session_service: InMemorySessionService,
     attendee: dict,
 ) -> dict:
-    """Executes the full pipeline for a single attendee, returns a result row."""
+    """Executes the full pipeline for a single attendee, returns a result row.
+
+    Builds a fresh agent tree (and therefore fresh stdio MCP subprocesses)
+    per attendee so concurrent sessions don't share Drive/Netlify pipes.
+    """
     timestamp = datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
     first = slugify(attendee['first_name'])
     last = slugify(attendee['last_name'])
@@ -74,6 +77,13 @@ async def run_pipeline_for_attendee(
         'site_slug': site_slug,
     }
 
+    agent = build_root_agent()
+    runner = Runner(
+        agent=agent,
+        app_name=APP_NAME,
+        session_service=session_service,
+    )
+
     await session_service.create_session(
         app_name=APP_NAME,
         user_id=user_id,
@@ -85,12 +95,24 @@ async def run_pipeline_for_attendee(
     error = None
 
     try:
-        async for _ in runner.run_async(
+        async for event in runner.run_async(
             user_id=user_id,
             session_id=session_id,
             new_message=trigger,
         ):
-            pass  # consume events; final state is committed to the session
+            author = getattr(event, 'author', None)
+            content = getattr(event, 'content', None)
+            if author and content:
+                for part in getattr(content, 'parts', []):
+                    fc = getattr(part, 'function_call', None)
+                    fr = getattr(part, 'function_response', None)
+                    text = getattr(part, 'text', None)
+                    if fc:
+                        print(f'  [{full_name}] {author} → {fc.name}()')
+                    elif fr:
+                        print(f'  [{full_name}] {author} ← {fr.name} done')
+                    elif text and event.is_final_response():
+                        print(f'  [{full_name}] {author} finished')
     except Exception as exc:
         error = str(exc)
 
@@ -127,11 +149,6 @@ async def main(csv_path: str) -> None:
         return
 
     session_service = InMemorySessionService()
-    runner = Runner(
-        agent=root_agent,
-        app_name=APP_NAME,
-        session_service=session_service,
-    )
 
     total_batches = math.ceil(len(attendees) / BATCH_SIZE)
     all_results: list[dict] = []
@@ -141,10 +158,21 @@ async def main(csv_path: str) -> None:
         batch = attendees[start:start + BATCH_SIZE]
         print(f'Batch {batch_index + 1}/{total_batches} — {len(batch)} attendees')
 
-        batch_results = await asyncio.gather(
-            *[run_pipeline_for_attendee(runner, session_service, a) for a in batch],
-            return_exceptions=False,
+        raw_results = await asyncio.gather(
+            *[run_pipeline_for_attendee(session_service, a) for a in batch],
+            return_exceptions=True,
         )
+        batch_results = [
+            r if isinstance(r, dict) else {
+                'attendee_name': f"{batch[i].get('first_name', '')} {batch[i].get('last_name', '')}".strip(),
+                'attendee_email': batch[i].get('email', ''),
+                'site_name': '',
+                'deployed_url': '',
+                'delivery_status': 'failed',
+                'error': str(r),
+            }
+            for i, r in enumerate(raw_results)
+        ]
         all_results.extend(batch_results)
 
         try:
