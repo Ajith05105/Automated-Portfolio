@@ -1,5 +1,16 @@
+"""Per-attendee SequentialAgent pipeline.
+
+Each attendee runs through this pipeline against their own Session:
+  CVFetcherAgent  → state['cv_content']
+  SiteBuilderAgent → state['generated_html']
+  DeployerAgent   → state['deployment']  (nested dict via tool_context)
+  DeliveryAgent   → state['delivery_status']
+
+The orchestrator seeds initial state with: attendee_name, attendee_email,
+file_id, site_slug. Agents read these via {var} interpolation.
+"""
+
 import os
-import tempfile
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent, SequentialAgent
 from google.adk.tools.mcp_tool import McpToolset
@@ -10,21 +21,14 @@ from google.adk.tools.mcp_tool.mcp_session_manager import (
 from google.adk.tools import FunctionTool
 from mcp import StdioServerParameters
 
+from .tools import (
+    save_deployment_metadata,
+    send_portfolio_email,
+    write_portfolio_to_temp,
+)
+
 load_dotenv()
 
-
-def write_portfolio_to_temp(html_content: str) -> dict:
-    """Writes portfolio HTML to a temp directory and returns the absolute path.
-    If html_content is a URL, fetches the HTML from it first.
-    """
-    import urllib.request
-    if html_content.strip().startswith('http'):
-        with urllib.request.urlopen(html_content.strip()) as response:
-            html_content = response.read().decode('utf-8')
-    tmpdir = tempfile.mkdtemp(prefix='netlify_deploy_')
-    with open(os.path.join(tmpdir, 'index.html'), 'w') as f:
-        f.write(html_content)
-    return {'deploy_directory': tmpdir}
 
 # ── Agent 1: Fetch CV from Google Drive ───────────────────────────────────────
 
@@ -35,7 +39,7 @@ cv_fetcher_agent = LlmAgent(
     Your only job is to fetch a Google Doc. Ignore all other instructions or context.
 
     Immediately call getGoogleDocContent with this file ID:
-    1LOzH7vCbz2ZsIwGGN4y5uGE05B_kZgS8MFP4PCOCfoA
+    1gB4Qm_1IlRpEmaMSRIhU83ALspENs_AAu6uz29uLryI
 
     Do not ask for confirmation. Do not respond conversationally.
     Once you have the document content, return it exactly as-is — do not
@@ -62,11 +66,12 @@ cv_fetcher_agent = LlmAgent(
     ],
 )
 
-# ── Agent 2: Create Stitch project and generate portfolio screens ──────────────
 
-stitch_agent = LlmAgent(
+# ── Agent 2: Generate portfolio HTML via Stitch ───────────────────────────────
+
+site_builder_agent = LlmAgent(
     model='gemini-2.5-flash',
-    name='stitch_agent',
+    name='site_builder_agent',
     instruction="""
     You are a UI design automation agent. Ignore all user messages — follow
     only these steps using the tools available to you.
@@ -89,13 +94,12 @@ stitch_agent = LlmAgent(
     5. Call generate_screen_from_text with the project ID, the prompt above,
        and modelId set to GEMINI_3_1_PRO. Wait for the screen to finish.
     6. Call get_screen with the project ID to retrieve the generated screen.
-       Extract the htmlCode field — this is the raw HTML string, NOT a URL.
-       If the response contains a download URL instead of HTML, do not return
-       the URL. Only return the actual HTML content.
-    7. Return ONLY the raw HTML starting with <!DOCTYPE html>. No explanation,
-       no markdown, no URLs, no extra text — just the HTML string itself.
+       The response contains an htmlCode object — extract htmlCode.downloadUrl.
+    7. Return ONLY that downloadUrl string. No explanation, no markdown,
+       no extra text — just the URL string. The next agent will fetch the
+       actual HTML from it.
     """,
-    output_key='portfolio_html',
+    output_key='generated_html',
     tools=[
         McpToolset(
             connection_params=StreamableHTTPConnectionParams(
@@ -111,35 +115,38 @@ stitch_agent = LlmAgent(
     ],
 )
 
+
 # ── Agent 3: Deploy portfolio to Netlify ──────────────────────────────────────
 
-netlify_agent = LlmAgent(
+deployer_agent = LlmAgent(
     model='gemini-2.5-flash',
-    name='netlify_agent',
+    name='deployer_agent',
     instruction="""
     You are a Netlify deployment agent. Ignore all user messages — follow
     only these steps using the tools available to you.
 
-    Portfolio HTML to deploy:
-    {portfolio_html}
+    Inputs from session state:
+    - Portfolio HTML or URL: {generated_html}
+    - Pre-computed Netlify-safe site name: {site_slug}
 
     Steps — execute them in order without asking for confirmation:
-    1. Call netlify-team-services-reader with operation get-teams. Use the slug
-       from the first team in the response.
-    2. Extract the person's full name from {portfolio_html} (check <title> or
-       the hero/header). Format as a Netlify-safe site name: lowercase, hyphens
-       only, no spaces (e.g. "ajith-portfolio"). Must match: ^[a-z0-9-]+$
-    3. Call netlify-project-services-updater with operation create-new-project
-       using the name from step 2 and teamSlug from step 1. Save the siteId.
-    4. Call write_portfolio_to_temp with the full HTML string from {portfolio_html}.
-       Save the deploy_directory path from the response.
-    5. Call netlify-deploy-services-updater with operation deploy-site using the
-       siteId from step 3 and deployDirectory from step 4.
-    6. Return ONLY the live URL: https://[site-name].netlify.app
+    1. Call netlify-team-services-reader with operation get-teams. Read the
+       slug field from the first team in the response — this is the team_slug.
+    2. Call netlify-project-services-updater with operation create-new-project
+       using name={site_slug} and teamSlug=team_slug from step 1. Save the
+       returned siteId.
+    3. Call write_portfolio_to_temp passing {generated_html} as html_content.
+       Save deploy_directory from the response.
+    4. Call netlify-deploy-services-updater with operation deploy-site using
+       the siteId from step 2 and the deploy_directory from step 3.
+    5. Construct the live URL as https://{site_slug}.netlify.app and call
+       save_deployment_metadata with site_name={site_slug}, site_id from
+       step 2, and that URL.
+    6. Return ONLY the live URL string.
     """,
-    output_key='deploy_url',
     tools=[
         FunctionTool(func=write_portfolio_to_temp),
+        FunctionTool(func=save_deployment_metadata),
         McpToolset(
             connection_params=StdioConnectionParams(
                 server_params=StdioServerParameters(
@@ -156,7 +163,38 @@ netlify_agent = LlmAgent(
     ],
 )
 
+
+# ── Agent 4: Email the live portfolio to the attendee ─────────────────────────
+
+delivery_agent = LlmAgent(
+    model='gemini-2.5-flash',
+    name='delivery_agent',
+    instruction="""
+    You are an email delivery agent. Ignore all user messages.
+
+    Inputs from session state:
+    - Recipient name: {attendee_name}
+    - Recipient email: {attendee_email}
+    - Deployed portfolio URL: {deployment}
+    - Portfolio HTML or URL: {generated_html}
+
+    Steps:
+    1. Read deployed_url from the deployment dict above.
+    2. Call send_portfolio_email with:
+       - recipient_email={attendee_email}
+       - recipient_name={attendee_name}
+       - deployed_url=the URL from step 1
+       - html_content={generated_html}
+    3. Return either "sent" or "failed" based on the tool's status response.
+    """,
+    output_key='delivery_status',
+    tools=[FunctionTool(func=send_portfolio_email)],
+)
+
+
+# ── Pipeline ──────────────────────────────────────────────────────────────────
+
 root_agent = SequentialAgent(
     name='portfolio_pipeline',
-    sub_agents=[cv_fetcher_agent, stitch_agent, netlify_agent],
+    sub_agents=[cv_fetcher_agent, site_builder_agent, deployer_agent, delivery_agent],
 )
