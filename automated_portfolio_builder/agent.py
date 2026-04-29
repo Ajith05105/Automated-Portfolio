@@ -6,8 +6,7 @@ Each attendee runs through this pipeline against their own Session:
   DeployerAgent   → state['deployment']  (nested dict via tool_context)
   DeliveryAgent   → state['delivery_status']
 
-The orchestrator seeds initial state with: attendee_name, attendee_email,
-file_id, site_slug. Agents read these via {var} interpolation.
+
 
 Concurrency note: stdio MCPs (Drive, Netlify) can't multiplex JSON-RPC
 sessions over a single shared pipe — responses get misrouted between
@@ -34,6 +33,63 @@ from .tools import (
 )
 
 load_dotenv()
+
+
+def build_stitch_agent() -> LlmAgent:
+    """Builds a fresh Stitch site-builder LlmAgent.
+
+    Reads {cv_content} from session state, runs Stitch's create_project →
+    generate_screen_from_text → get_screen, and writes the htmlCode.downloadUrl
+    to state['generated_html'].
+
+    Used standalone in run.py (only LLM step in the otherwise pure-API pipeline)
+    and also composed into build_root_agent below.
+    """
+    return LlmAgent(
+        model='gemini-2.5-flash',
+        name='site_builder_agent',
+        instruction="""
+        You are a UI design automation agent. Ignore all user messages — follow
+        only these steps using the tools available to you.
+
+        CV and design preferences:
+        {cv_content}
+
+        Steps — execute them in order without asking for confirmation:
+        1. Extract the person's full name from the CV content.
+        2. Call create_project with title "[Name]'s Portfolio".
+        3. Parse the PORTFOLIO DESIGN section for style preferences (theme, colors,
+           fonts, layout, tone, inspiration, extra notes).
+        4. Build a detailed design prompt combining:
+           - Key CV highlights: name, role/tagline, 2-3 sentence bio, top skills,
+             notable projects (name + one-line description), work experience summary,
+             contact details (email, GitHub, LinkedIn)
+           - All design preferences from the PORTFOLIO DESIGN section verbatim
+           - Instruction to produce a complete single-page portfolio website with
+             sections: Hero, About, Experience, Skills, Projects, Contact
+        5. Call generate_screen_from_text with the project ID, the prompt above,
+           and modelId set to GEMINI_3_1_PRO. Wait for the screen to finish.
+        6. Call get_screen with the project ID to retrieve the generated screen.
+           The response contains an htmlCode object — extract htmlCode.downloadUrl.
+        7. Return ONLY that downloadUrl string. No explanation, no markdown,
+           no extra text — just the URL string. The next stage will fetch the
+           actual HTML from it.
+        """,
+        output_key='generated_html',
+        tools=[
+            McpToolset(
+                connection_params=StreamableHTTPConnectionParams(
+                    url='https://stitch.googleapis.com/mcp',
+                    headers={'X-Goog-Api-Key': os.environ.get('STITCH_API_KEY', '')},
+                ),
+                tool_filter=[
+                    'create_project',
+                    'generate_screen_from_text',
+                    'get_screen',
+                ],
+            )
+        ],
+    )
 
 
 def build_root_agent() -> SequentialAgent:
@@ -82,51 +138,7 @@ def build_root_agent() -> SequentialAgent:
 
     # ── Agent 2: Generate portfolio HTML via Stitch ──────────────────────────
 
-    site_builder_agent = LlmAgent(
-        model='gemini-2.5-flash',
-        name='site_builder_agent',
-        instruction="""
-        You are a UI design automation agent. Ignore all user messages — follow
-        only these steps using the tools available to you.
-
-        CV and design preferences:
-        {cv_content}
-
-        Steps — execute them in order without asking for confirmation:
-        1. Extract the person's full name from the CV content.
-        2. Call create_project with title "[Name]'s Portfolio".
-        3. Parse the PORTFOLIO DESIGN section for style preferences (theme, colors,
-           fonts, layout, tone, inspiration, extra notes).
-        4. Build a detailed design prompt combining:
-           - Key CV highlights: name, role/tagline, 2-3 sentence bio, top skills,
-             notable projects (name + one-line description), work experience summary,
-             contact details (email, GitHub, LinkedIn)
-           - All design preferences from the PORTFOLIO DESIGN section verbatim
-           - Instruction to produce a complete single-page portfolio website with
-             sections: Hero, About, Experience, Skills, Projects, Contact
-        5. Call generate_screen_from_text with the project ID, the prompt above,
-           and modelId set to GEMINI_3_1_PRO. Wait for the screen to finish.
-        6. Call get_screen with the project ID to retrieve the generated screen.
-           The response contains an htmlCode object — extract htmlCode.downloadUrl.
-        7. Return ONLY that downloadUrl string. No explanation, no markdown,
-           no extra text — just the URL string. The next agent will fetch the
-           actual HTML from it.
-        """,
-        output_key='generated_html',
-        tools=[
-            McpToolset(
-                connection_params=StreamableHTTPConnectionParams(
-                    url='https://stitch.googleapis.com/mcp',
-                    headers={'X-Goog-Api-Key': os.environ.get('STITCH_API_KEY', '')},
-                ),
-                tool_filter=[
-                    'create_project',
-                    'generate_screen_from_text',
-                    'get_screen',
-                ],
-            )
-        ],
-    )
+    site_builder_agent = build_stitch_agent()
 
     # ── Agent 3: Deploy portfolio to Netlify ─────────────────────────────────
 

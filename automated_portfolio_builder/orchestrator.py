@@ -32,7 +32,7 @@ from .sheets import append_results
 load_dotenv()
 
 APP_NAME = 'portfolio-builder'
-BATCH_SIZE = 2
+BATCH_SIZE = 1
 
 
 def slugify(value: str) -> str:
@@ -158,8 +158,14 @@ async def main(csv_path: str) -> None:
         batch = attendees[start:start + BATCH_SIZE]
         print(f'Batch {batch_index + 1}/{total_batches} — {len(batch)} attendees')
 
+        async def staggered(attendee: dict, index: int) -> dict:
+            # Stagger Drive MCP starts so concurrent processes don't race
+            # on the same OAuth token file at the exact same moment.
+            await asyncio.sleep(index * 10)
+            return await run_pipeline_for_attendee(session_service, attendee)
+
         raw_results = await asyncio.gather(
-            *[run_pipeline_for_attendee(session_service, a) for a in batch],
+            *[staggered(a, i) for i, a in enumerate(batch)],
             return_exceptions=True,
         )
         batch_results = [

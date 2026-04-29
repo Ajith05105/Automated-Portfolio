@@ -22,9 +22,20 @@ def write_portfolio_to_temp(html_content: str) -> dict:
     this also handles the case where html_content is a URL: it fetches the
     content and writes it as index.html. Also seeds an empty .netlify/state.json
     inside the temp dir, which the Netlify MCP requires before deploy-site.
+
+    Fails loudly if html_content isn't a URL or recognisable HTML — prevents
+    deploying a blank portfolio when site_builder skipped get_screen.
     """
-    if html_content.strip().startswith('http'):
-        with urllib.request.urlopen(html_content.strip()) as response:
+    stripped = (html_content or '').strip()
+    if not stripped:
+        raise ValueError('generated_html is empty — site_builder likely skipped get_screen')
+    if not stripped.startswith('http') and '<' not in stripped:
+        raise ValueError(
+            f'generated_html is neither a URL nor HTML: {stripped[:200]!r}'
+        )
+
+    if stripped.startswith('http'):
+        with urllib.request.urlopen(stripped, timeout=30) as response:
             html_content = response.read().decode('utf-8')
 
     tmpdir = tempfile.mkdtemp(prefix='netlify_deploy_')
@@ -73,7 +84,7 @@ def send_portfolio_email(
     Writes 'sent' or 'failed' to state['delivery_status'].
     """
     if html_content.strip().startswith('http'):
-        with urllib.request.urlopen(html_content.strip()) as response:
+        with urllib.request.urlopen(html_content.strip(), timeout=30) as response:
             html_content = response.read().decode('utf-8')
 
     sender = os.environ.get('GMAIL_USER')
