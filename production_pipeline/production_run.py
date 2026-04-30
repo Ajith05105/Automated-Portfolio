@@ -194,6 +194,12 @@ def _build_stitch_instruction(cv: dict, style: dict) -> str:
 
     return f"""You are a world-class UI design automation agent. Follow only these steps.
 
+STRICT RULE — NO HALLUCINATION:
+Only use the data provided below. If a field is empty, omit that section entirely.
+Do NOT invent names, job titles, companies, skills, projects, links, or any other
+information. Do NOT use placeholder text like "Your Name", "Company Name", or
+"example.com". If a section has no data, leave it out of the design completely.
+
 CV DATA (already structured — use these values directly):
 - name: {name}
 - summary: {summary}
@@ -264,6 +270,44 @@ def _build_stitch_agent(cv: dict, style: dict) -> LlmAgent:
     )
 
 
+def _find_html_url(value) -> str | None:
+    """Recursively search a structure for a contribution.usercontent.google.com URL."""
+    if isinstance(value, str):
+        if 'contribution.usercontent.google.com' in value and value.startswith('http'):
+            return value
+        return None
+    if isinstance(value, dict):
+        for v in value.values():
+            found = _find_html_url(v)
+            if found:
+                return found
+    if isinstance(value, list):
+        for v in value:
+            found = _find_html_url(v)
+            if found:
+                return found
+    return None
+
+
+def _find_html_string(value) -> str | None:
+    """Recursively search a structure for raw HTML starting with <!DOCTYPE."""
+    if isinstance(value, str):
+        if '<!DOCTYPE' in value.upper():
+            return value
+        return None
+    if isinstance(value, dict):
+        for v in value.values():
+            found = _find_html_string(v)
+            if found:
+                return found
+    if isinstance(value, list):
+        for v in value:
+            found = _find_html_string(v)
+            if found:
+                return found
+    return None
+
+
 async def run_stitch_agent(cv: dict, style: dict) -> str:
     agent = _build_stitch_agent(cv, style)
     session_service = InMemorySessionService()
@@ -273,24 +317,60 @@ async def run_stitch_agent(cv: dict, style: dict) -> str:
     )
     runner = Runner(app_name=APP_NAME, agent=agent, session_service=session_service)
 
+    html_string = None
+    download_url = None
     final_text = ''
+
     user_msg = types.Content(role='user', parts=[types.Part(text='Generate the portfolio.')])
     async for event in runner.run_async(
         user_id=USER_ID, session_id=session_id, new_message=user_msg,
     ):
-        if event.is_final_response() and event.content and event.content.parts:
-            for part in event.content.parts:
-                text = getattr(part, 'text', None)
-                if text:
-                    final_text = text
-                    break
+        if not (event.content and event.content.parts):
+            continue
 
-    return final_text.strip()
+        for part in event.content.parts:
+            # Pull HTML / URL straight from the get_screen tool response
+            func_resp = getattr(part, 'function_response', None)
+            if func_resp:
+                response = getattr(func_resp, 'response', None)
+                if response is not None:
+                    if not html_string:
+                        html_string = _find_html_string(response)
+                    if not download_url:
+                        download_url = _find_html_url(response)
+
+            # Fallback: model's final text
+            if event.is_final_response():
+                text = getattr(part, 'text', None)
+                if text and not final_text:
+                    final_text = text
+
+    if html_string:
+        print(f"[STITCH] Got HTML directly from tool response ({len(html_string)} chars)")
+        return html_string.strip()
+
+    if download_url:
+        print(f"[STITCH] Got download URL from tool response: {download_url[:80]}...")
+        return await asyncio.to_thread(_fetch_url, download_url)
+
+    # Last resort: whatever the model said
+    result = final_text.strip()
+    print(f"[STITCH] Falling back to model output: {result[:120]!r}")
+    if result.startswith('http') and 'lh3.googleusercontent.com' in result:
+        raise RuntimeError(
+            'Stitch only returned an image preview URL. Re-run this attendee.'
+        )
+    if result.startswith('http'):
+        return await asyncio.to_thread(_fetch_url, result)
+    return result
 
 
 def _fetch_url(url: str) -> str:
     req = urllib.request.Request(
-        url, headers={'User-Agent': 'Mozilla/5.0 (portfolio-runner)'},
+        url, headers={
+            'User-Agent': 'Mozilla/5.0 (portfolio-runner)',
+            'Accept': 'text/html,application/xhtml+xml,*/*',
+        },
     )
     with urllib.request.urlopen(req, timeout=60) as resp:
         return resp.read().decode('utf-8')
