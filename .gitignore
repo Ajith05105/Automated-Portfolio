@@ -35,3 +35,6 @@ env/
 
 # Local Netlify folder
 .netlify
+
+# Service account credentials
+service-account.json
