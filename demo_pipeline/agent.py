@@ -19,10 +19,10 @@ load_dotenv()
 
 def send_portfolio_email(recipient_email: str, recipient_name: str, deploy_url: str, tool_context: ToolContext) -> dict:
     """Sends the portfolio deploy URL to the recipient via Gmail SMTP."""
-    gmail_user = os.environ.get('GMAIL_USER', '')
-    gmail_password = os.environ.get('GMAIL_APP_PASSWORD', '')
+    gmail_user = os.environ.get('SMTP_EMAIL', '')
+    gmail_password = os.environ.get('SMTP_APP_PASSWORD', '')
     if not gmail_user or not gmail_password:
-        return {'status': 'failed', 'error': 'GMAIL_USER or GMAIL_APP_PASSWORD not set'}
+        return {'status': 'failed', 'error': 'SMTP_EMAIL or SMTP_APP_PASSWORD not set'}
     msg = EmailMessage()
     msg['Subject'] = f"Your Portfolio is Live, {recipient_name}!"
     msg['From'] = gmail_user

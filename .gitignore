@@ -32,3 +32,6 @@ env/
 #ADK
 .adk/
 
+
+# Local Netlify folder
+.netlify
