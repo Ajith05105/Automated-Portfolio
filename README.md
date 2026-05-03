@@ -21,10 +21,10 @@ The pipeline runs four agents in sequence:
 
 - Python 3.11+
 - Node.js 18+
-- A Google Cloud project with Vertex AI enabled
+- A Google Cloud project
 - A [Google Stitch](https://stitch.withgoogle.com) API key
 - A Netlify account
-- A Gmail account with an [App Password](https://myaccount.google.com/apppasswords)
+- A Gmail account with **2-Step Verification enabled** and an [App Password](https://myaccount.google.com/apppasswords) generated
 
 ---
 
@@ -54,28 +54,41 @@ Fill in your values in `.env`:
 | `GOOGLE_CLOUD_PROJECT` | Your GCP project ID |
 | `GOOGLE_CLOUD_LOCATION` | GCP region (e.g. `us-central1`) |
 | `STITCH_API_KEY` | API key from [stitch.withgoogle.com/settings](https://stitch.withgoogle.com/settings) |
+| `CV_GOOGLE_DOC_ID` | File ID of the Google Doc CV (from its URL) |
 | `GMAIL_USER` | Gmail address used to send emails |
-| `GMAIL_APP_PASSWORD` | 16-character Gmail App Password |
+| `GMAIL_APP_PASSWORD` | 16-character Gmail App Password (requires 2FA enabled) |
 
-### 3. Authenticate with Google Cloud
+### 3. Authenticate with Google Cloud and enable required APIs
 
 ```bash
 brew install google-cloud-sdk          # macOS; see gcloud docs for other platforms
 gcloud auth application-default login
 gcloud auth application-default set-quota-project YOUR_PROJECT_ID
+
+# Enable the Stitch API
+gcloud beta services mcp enable stitch.googleapis.com --project="YOUR_PROJECT_ID"
+
+# Grant your account permission to consume GCP services
+USER_EMAIL=$(gcloud config get-value account)
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+    --member="user:$USER_EMAIL" \
+    --role="roles/serviceusage.serviceUsageConsumer" \
+    --condition=None
 ```
 
 ### 4. Set up the Google Drive MCP
 
 The pipeline reads CVs from Google Docs using the [`@piotr-agier/google-drive-mcp`](https://github.com/piotr-agier/google-drive-mcp) server.
 
-```bash
-# Place your OAuth keys file at:
-~/.config/google-drive-mcp/gcp-oauth.keys.json
+Follow the **Google Cloud Setup** steps in that repo's README to enable the required APIs, configure the OAuth consent screen, and create OAuth credentials. If you already have a Google Cloud project, you can skip step 1 and start from **step 2 (Enable Required APIs)**.
 
-# Authenticate (opens browser)
+Once you have your `gcp-oauth.keys.json`, place it at `~/.config/google-drive-mcp/gcp-oauth.keys.json`, then run:
+
+```bash
 npx @piotr-agier/google-drive-mcp auth
 ```
+
+This opens a browser for you to authorise access. Credentials are saved locally and reused on subsequent runs.
 
 ### 5. Authenticate with Netlify
 
@@ -97,7 +110,7 @@ adk web
 
 Open [http://localhost:8000](http://localhost:8000) and type `run` to start the pipeline.
 
-To use a different CV, update the Google Doc file ID in `demo_pipeline/agent.py` inside `cv_fetcher_agent`.
+To use a different CV, set `CV_GOOGLE_DOC_ID` in your `.env` to the file ID from the Google Doc URL.
 
 ---
 

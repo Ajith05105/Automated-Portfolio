@@ -49,15 +49,23 @@ def write_portfolio_to_temp(html_content: str) -> dict:
         }
 
     if html_content.startswith('http'):
-        req = urllib.request.Request(html_content, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req) as response:
-            content_type = response.headers.get('Content-Type', '')
-            if 'text/html' not in content_type and 'text/plain' not in content_type:
-                return {
-                    'error': f'URL did not return HTML (Content-Type: {content_type}). '
-                             'Pass the contribution.usercontent.google.com download URL.'
-                }
-            html_content = response.read().decode('utf-8')
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        if 'googleusercontent.com' in html_content or 'googleapis.com' in html_content:
+            stitch_key = os.environ.get('STITCH_API_KEY', '')
+            if stitch_key:
+                headers['X-Goog-Api-Key'] = stitch_key
+        req = urllib.request.Request(html_content, headers=headers)
+        try:
+            with urllib.request.urlopen(req) as response:
+                content_type = response.headers.get('Content-Type', '')
+                if 'text/html' not in content_type and 'text/plain' not in content_type:
+                    return {
+                        'error': f'URL did not return HTML (Content-Type: {content_type}). '
+                                 'Pass the contribution.usercontent.google.com download URL.'
+                    }
+                html_content = response.read().decode('utf-8')
+        except Exception as e:
+            return {'error': f'Failed to fetch HTML from URL: {e}'}
 
     tmpdir = tempfile.mkdtemp(prefix='netlify_deploy_')
     with open(os.path.join(tmpdir, 'index.html'), 'w') as f:

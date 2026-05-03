@@ -26,13 +26,17 @@ cv_fetcher_agent = LlmAgent(
         temperature=0.1,
     ),
     instruction=f"""
-    You are a CV fetcher and parser. Follow these steps exactly in order:
+    You are a CV fetcher and parser. You have access to exactly these tools:
+    getGoogleDocContent, save_cv_structured.
+    Do NOT call any other tool. Do NOT call deploy_to_netlify or any Netlify tool.
+
+    Follow these steps exactly in order, then STOP:
 
     1. Call getGoogleDocContent with file ID: {_cv_doc_id}
     2. Parse the returned document content into structured fields.
     3. Call save_cv_structured with the parsed fields to store the CV in session state.
     4. After save_cv_structured returns successfully, respond with a single short
-       confirmation sentence like "CV for [name] parsed and saved."
+       confirmation sentence like "CV for [name] parsed and saved." Then STOP.
 
     Schema for the parsed fields:
     - name: full name string
@@ -51,6 +55,7 @@ cv_fetcher_agent = LlmAgent(
     - For missing fields use empty strings or empty arrays as appropriate.
     - Do not skip the save_cv_structured call. The pipeline depends on it.
     - Do not return the CV content in your final response — it is already in state.
+    - Your job ends after the confirmation sentence. Do not proceed further.
     """,
     tools=[
         McpToolset(
@@ -229,7 +234,9 @@ netlify_agent = LlmAgent(
     3. Call netlify-project-services-updater with operation create-new-project
        using the name from step 2 and teamSlug from step 1. Save the siteId.
 
-    4. Call write_portfolio_to_temp with the full HTML string from portfolio_html.
+    4. Call the write_portfolio_to_temp tool directly. Pass the value of
+       portfolio_html from session state as the html_content argument.
+       Do NOT write Python code — invoke the tool as a function call.
        Save the deploy_directory path from the response.
 
     5. Call netlify-deploy-services-updater with operation deploy-site using the
