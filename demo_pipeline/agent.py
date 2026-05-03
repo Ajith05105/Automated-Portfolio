@@ -1,7 +1,4 @@
 import os
-import smtplib
-import tempfile
-from email.message import EmailMessage
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent, SequentialAgent
 from google.adk.tools.mcp_tool import McpToolset
@@ -10,108 +7,17 @@ from google.adk.tools.mcp_tool.mcp_session_manager import (
     StreamableHTTPConnectionParams,
 )
 from google.adk.tools import FunctionTool
-from google.adk.tools.tool_context import ToolContext
 from mcp import StdioServerParameters
 from google.genai import types
+
+from demo_pipeline.tools import send_portfolio_email, write_portfolio_to_temp, save_cv_structured
 
 load_dotenv()
 
 
-def send_portfolio_email(recipient_email: str, recipient_name: str, deploy_url: str, tool_context: ToolContext) -> dict:
-    """Sends the portfolio deploy URL to the recipient via Gmail SMTP."""
-    gmail_user = os.environ.get('SMTP_EMAIL', '')
-    gmail_password = os.environ.get('SMTP_APP_PASSWORD', '')
-    if not gmail_user or not gmail_password:
-        return {'status': 'failed', 'error': 'SMTP_EMAIL or SMTP_APP_PASSWORD not set'}
-    msg = EmailMessage()
-    msg['Subject'] = f"Your Portfolio is Live, {recipient_name}!"
-    msg['From'] = gmail_user
-    msg['To'] = recipient_email
-    msg.set_content(f"""Hi {recipient_name},
-
-Your portfolio has been built and deployed. You can view it here:
-
-{deploy_url}
-
-Congrats!
-""")
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(gmail_user, gmail_password)
-            smtp.send_message(msg)
-        return {'status': 'sent'}
-    except Exception as e:
-        return {'status': 'failed', 'error': str(e)}
-
-
-def write_portfolio_to_temp(html_content: str) -> dict:
-    """Writes portfolio HTML to a temp directory and returns the absolute path.
-    If html_content is a URL, fetches the HTML from it first.
-    """
-    import urllib.request
-    if html_content.strip().startswith('http'):
-        with urllib.request.urlopen(html_content.strip()) as response:
-            html_content = response.read().decode('utf-8')
-    tmpdir = tempfile.mkdtemp(prefix='netlify_deploy_')
-    with open(os.path.join(tmpdir, 'index.html'), 'w') as f:
-        f.write(html_content)
-    return {'deploy_directory': tmpdir}
-
-def save_cv_structured(
-    tool_context: ToolContext,
-    name: str,
-    email: str,
-    phone: str,
-    summary: str,
-    experience: list,
-    education: list,
-    skills: list,
-    projects: list,
-    github: str,
-    linkedin: str,
-) -> dict:
-    """Saves the structured CV data to session state.
-
-    Call this after fetching and parsing the CV from Google Drive.
-    All fields are required — pass empty strings or empty arrays for missing data.
-
-    Args:
-        name: Full name of the candidate.
-        email: Email address, or empty string if not present.
-        phone: Phone number, or empty string if not present.
-        summary: Professional summary, 2-3 sentences. Empty string if absent.
-        experience: List of dicts with keys: company, role, duration, description.
-        education: List of dicts with keys: institution, degree, duration.
-        skills: List of skill strings.
-        projects: List of dicts with keys: name, description, url.
-        github: GitHub profile URL, or empty string.
-        linkedin: LinkedIn profile URL, or empty string.
-
-    Returns:
-        Confirmation dict with status and the candidate name.
-    """
-    cv_data = {
-        "name": name,
-        "email": email,
-        "phone": phone,
-        "summary": summary,
-        "experience": experience,
-        "education": education,
-        "skills": skills,
-        "projects": projects,
-        "github": github,
-        "linkedin": linkedin,
-    }
-
-    tool_context.state["cv_content"] = cv_data
-
-    return {
-        "status": "saved",
-        "name": name,
-        "message": f"CV for {name} saved to session state.",
-    }
-
 # ── Agent 1: Fetch CV from Google Drive ───────────────────────────────────────
+
+_cv_doc_id = os.environ.get('CV_GOOGLE_DOC_ID', '')
 
 cv_fetcher_agent = LlmAgent(
     model='gemini-2.5-flash',
@@ -119,10 +25,10 @@ cv_fetcher_agent = LlmAgent(
     generate_content_config=types.GenerateContentConfig(
         temperature=0.1,
     ),
-    instruction="""
+    instruction=f"""
     You are a CV fetcher and parser. Follow these steps exactly in order:
 
-    1. Call getGoogleDocContent with file ID: 1txxa3D1EM_tLAL93hLCtivb7TbyCqE4Q8mqTNdf_XW4
+    1. Call getGoogleDocContent with file ID: {_cv_doc_id}
     2. Parse the returned document content into structured fields.
     3. Call save_cv_structured with the parsed fields to store the CV in session state.
     4. After save_cv_structured returns successfully, respond with a single short
@@ -175,6 +81,24 @@ stitch_agent = LlmAgent(
     ),
     instruction="""
     You are a world-class UI design automation agent. Follow only these steps.
+
+    STRICT RULES — NO HALLUCINATION, NO INVENTED LINKS:
+    1. Only use the data in cv_content from session state. If a field is empty
+       or missing, omit that section entirely.
+    2. Do NOT invent names, job titles, companies, skills, projects, or any
+       other text content.
+    3. Do NOT use placeholder text like "Your Name", "Company Name", or
+       "example.com".
+    4. NEVER create any links other than:
+       - <a href="mailto:cv_content.email"> (only if cv_content.email is present)
+       - <a href="cv_content.github"> (only if cv_content.github is present)
+       - <a href="cv_content.linkedin"> (only if cv_content.linkedin is present)
+       - Project URLs from cv_content.projects (only if a project has a non-empty url)
+    5. For projects: only add an <a href="..."> tag if the project entry has a
+       non-empty "url" field. If a project has no URL, render it as text only —
+       DO NOT link it to GitHub search, "#", "javascript:void(0)", or any made-up URL.
+    6. Footer must contain ONLY the email/GitHub/LinkedIn links above —
+       no Twitter, Instagram, Dribbble, Medium, Dev.to, or any other social accounts.
 
     The candidate's structured CV data is available in session state under cv_content
     with these fields:
@@ -231,10 +155,13 @@ stitch_agent = LlmAgent(
        - Name as the hero heading
        - Summary as the bio under the name
        - Top skills as glowing pill badges
-       - Projects: name, description, url as clickable card links if url is present
+       - Projects: name + description as cards. Only wrap a card in <a href="...">
+         if that project's url field is non-empty. Never invent project URLs.
        - Experience: company, role, duration, description as cards
        - Education: institution, degree, duration as a clean section
-       - Contact: email, GitHub, LinkedIn as icon links in the footer
+       - Contact: ONLY email/GitHub/LinkedIn from cv_content as icon links in the
+         footer. Never add Twitter, Instagram, Dribbble, Medium, or any other
+         social account that is not in cv_content.
 
        Produce a COMPLETE single-page HTML file with all CSS inlined in <style>.
        No external CSS frameworks. No placeholder text. Use only real content
@@ -243,12 +170,18 @@ stitch_agent = LlmAgent(
     4. Call generate_screen_from_text with the project ID, the prompt above,
        and modelId set to GEMINI_3_1_PRO. Wait for the screen to finish.
 
-    5. Call get_screen with the project ID. Extract the htmlCode field — this
-       is the raw HTML string, NOT a URL. If the response contains a download URL
-       instead of HTML, do not return the URL. Only return the actual HTML content.
+    5. Call get_screen with the project ID. Inspect the response carefully:
+       - If htmlCode field contains HTML starting with <!DOCTYPE — return that
+         string directly
+       - Otherwise, find the URL from contribution.usercontent.google.com and
+         return that URL exactly as-is
+       - NEVER return any URL from lh3.googleusercontent.com — that is a PNG
+         image preview, not HTML
 
-    6. Return ONLY the raw HTML starting with <!DOCTYPE html>. No explanation,
-       no markdown, no URLs, no extra text — just the HTML string itself.
+    6. Return ONLY one of the following — no explanation, no markdown, no extra text:
+       - The raw HTML string starting with <!DOCTYPE html>, OR
+       - The contribution.usercontent.google.com download URL
+       The next step will fetch the URL automatically if needed.
     """,
     output_key='portfolio_html',
     tools=[

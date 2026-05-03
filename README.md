@@ -1,134 +1,146 @@
 # Automated Portfolio Builder
 
-An AI-powered pipeline that reads a CV from Google Drive and generates a 
-deployed portfolio website using Google ADK, Gemini, and Firebase.
+An AI-powered pipeline that reads a CV from Google Drive and automatically generates and deploys a personal portfolio website.
+
+Built with [Google ADK](https://google.github.io/adk-docs/), Gemini 2.5 Flash, [Google Stitch](https://stitch.withgoogle.com), and [Netlify](https://www.netlify.com).
+
+---
 
 ## How It Works
 
-1. Agent 1 fetches CV content from a Google Doc via Google Drive MCP
-2. Agent 2 generates a styled HTML portfolio using Google Stitch
-3. Agent 3 deploys the site to Netlify and returns a live URL
+The pipeline runs four agents in sequence:
+
+1. **CV Fetcher** — reads a Google Doc CV via the Google Drive MCP and saves structured data to session state
+2. **Stitch Designer** — generates a complete single-page HTML portfolio using Google Stitch
+3. **Netlify Deployer** — deploys the HTML to a live Netlify site
+4. **Email Delivery** — sends the live URL to the candidate via Gmail
+
+---
 
 ## Prerequisites
 
 - Python 3.11+
 - Node.js 18+
-- Git
+- A Google Cloud project with Vertex AI enabled
+- A [Google Stitch](https://stitch.withgoogle.com) API key
+- A Netlify account
+- A Gmail account with an [App Password](https://myaccount.google.com/apppasswords)
+
+---
 
 ## Setup
 
+### 1. Clone and create a virtual environment
 
-### 1. Create a virtual environment
-
+```bash
+git clone https://github.com/your-org/automated-portfolio
+cd automated-portfolio
 python -m venv .venv
-source .venv/bin/activate
-
-### 2. Install dependencies
-
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+```
 
-## Configure environment variables and google cloud
+### 2. Configure environment variables
 
-### 1. Install gcloud
-brew install google-cloud-sdk
-
-### 2. Login with the email added to google cloud
-gcloud auth application-default login 
-
-### 3. Set quota project
-gcloud auth application-default set-quota-project portfolio-builder-494211
-
-### 4. configure env 
+```bash
 cp .env.example .env
-
-
-
-
-
-## Set up Google Stitch MCP
-
-### 1. Get a Stitch API key
-Go to [stitch.withgoogle.com/settings](https://stitch.withgoogle.com/settings) → create an API key.
-
-### 2. Add it to your .env
-```
-STITCH_API_KEY=your_api_key_here
 ```
 
-No CLI login needed — the key is passed directly in the MCP request headers.
+Fill in your values in `.env`:
 
----
+| Variable | Description |
+|---|---|
+| `GOOGLE_GENAI_USE_VERTEXAI` | Set to `1` to use Vertex AI |
+| `GOOGLE_CLOUD_PROJECT` | Your GCP project ID |
+| `GOOGLE_CLOUD_LOCATION` | GCP region (e.g. `us-central1`) |
+| `STITCH_API_KEY` | API key from [stitch.withgoogle.com/settings](https://stitch.withgoogle.com/settings) |
+| `GMAIL_USER` | Gmail address used to send emails |
+| `GMAIL_APP_PASSWORD` | 16-character Gmail App Password |
 
-## Set up Netlify MCP
+### 3. Authenticate with Google Cloud
 
-### 1. Authenticate
-Run this in your terminal:
+```bash
+brew install google-cloud-sdk          # macOS; see gcloud docs for other platforms
+gcloud auth application-default login
+gcloud auth application-default set-quota-project YOUR_PROJECT_ID
 ```
-npx netlify-cli login
-```
-This opens your browser — sign in with your Netlify account. The token is stored locally at `~/.netlify/config.json` and is used automatically by the MCP on every run.
 
----
+### 4. Set up the Google Drive MCP
 
-## Set up Google Drive MCP
+The pipeline reads CVs from Google Docs using the [`@piotr-agier/google-drive-mcp`](https://github.com/piotr-agier/google-drive-mcp) server.
 
-### 1. Setup Oauth
-Get the `gcp-oauth.keys.json` file from Ajith and place it at:
-
+```bash
+# Place your OAuth keys file at:
 ~/.config/google-drive-mcp/gcp-oauth.keys.json
 
-### 2. Authenticate (use the same google account)
-
+# Authenticate (opens browser)
 npx @piotr-agier/google-drive-mcp auth
+```
 
-This opens your browser — sign in with your Google account.
+### 5. Authenticate with Netlify
 
-### 3. Run the agent
+```bash
+npx netlify-cli login
+```
 
+This saves a token locally that the pipeline reads automatically.
+
+---
+
+## Running the Demo Pipeline
+
+The demo pipeline runs in the ADK web UI and is pre-configured to read a single CV from a hardcoded Google Doc ID.
+
+```bash
 adk web
+```
 
-Then open your browser at http://localhost:8000
+Open [http://localhost:8000](http://localhost:8000) and type `run` to start the pipeline.
+
+To use a different CV, update the Google Doc file ID in `demo_pipeline/agent.py` inside `cv_fetcher_agent`.
+
+---
 
 ## Project Structure
 
 ```
-AUTOMATED-PORTFOLIO/
-├── automated_portfolio_builder/
+automated-portfolio/
+├── demo_pipeline/
 │   ├── __init__.py
-│   └── agent.py
-├── .env
+│   ├── agent.py        # Agent definitions (4 LlmAgents + SequentialAgent)
+│   └── tools.py        # FunctionTools: save_cv_structured, write_portfolio_to_temp, send_portfolio_email
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
 └── README.md
 ```
 
-## CV Template
+---
 
-Attendees should fill out the Google Doc template with the following fields:
+## CV Format
 
+The Google Doc CV should contain the following fields (plain text, one per line):
+
+```
 Name:
-Title:
-About:
+Email:
+Phone:
+Summary:
 Skills:
-Project 1 Name:
-Project 1 Description:
-Project 1 Link:
-Experience:
-Contact Email:
-LinkedIn:
+Experience (company, role, duration, description per entry):
+Education (institution, degree, duration per entry):
+Projects (name, description, URL per entry):
 GitHub:
+LinkedIn:
+```
 
-Style: [minimal / bold / creative / corporate / playful]
-Theme: [dark / light / auto]
-Primary Color: [e.g. teal, purple, orange, or hex code]
-Font Preference: [modern / classic / technical / none]
-Layout: [single-page / multi-page]
-Section Order: [e.g. Hero, About, Experience, Skills, Projects, Contact]
-Tone: [professional / casual / creative]
-Inspiration: [optional — e.g. "like stripe.com" or "clean and typographic"]
-Extra Notes: [anything else — e.g. "no animations", "lots of whitespace", "bold headings"]
+The CV Fetcher agent parses this into structured data — no special formatting required.
 
-## Team
+---
 
-Built by GDGC Auckland for the NFC workshop
+## Contributing
+
+Pull requests are welcome. For major changes, open an issue first to discuss what you'd like to change.
+
+---
+
