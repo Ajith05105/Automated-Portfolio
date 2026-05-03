@@ -32,3 +32,9 @@ env/
 #ADK
 .adk/
 
+
+# Local Netlify folder
+.netlify
+
+# Service account credentials
+service-account.json
